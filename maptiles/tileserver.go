@@ -1,6 +1,7 @@
 package maptiles
 
 import (
+	"fmt"
 	"log"
 	"net/http"
 	"regexp"
@@ -15,21 +16,27 @@ type TileServer struct {
 	m         *TileDb
 	lmp       *LayerMultiplex
 	TmsSchema bool
+	// cacheFile string
+	url string
 }
 
-func NewTileServer(cacheFile string) *TileServer {
+func NewTileServer(url string) *TileServer {
 	t := TileServer{}
 	t.lmp = NewLayerMultiplex()
-	t.m = NewTileDb(cacheFile)
+	// t.m = NewTileDb(cacheFile)
+	// t.cacheFile = cacheFile
+	t.url = url
 
 	return &t
 }
 
-func (t *TileServer) AddMapnikLayer(layerName string, stylesheet string) {
-	t.lmp.AddRenderer(layerName, stylesheet)
+/*
+func (t *TileServer) AddXYZLayer(layerName string, url string) {
+	t.lmp.AddRenderer(layerName, url)
 }
+*/
 
-var pathRegex = regexp.MustCompile(`/([A-Za-z0-9]+)/([0-9]+)/([0-9]+)/([0-9]+)\.png`)
+var pathRegex = regexp.MustCompile(`/([-A-Za-z0-9]+)/([0-9]+)/([0-9]+)/([0-9]+)(@[0-9]+x)?\.png`)
 
 func (t *TileServer) ServeTileRequest(w http.ResponseWriter, r *http.Request, tc TileCoord) {
 	ch := make(chan TileFetchResult)
@@ -74,6 +81,15 @@ func (t *TileServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	z, _ := strconv.ParseUint(path[2], 10, 64)
 	x, _ := strconv.ParseUint(path[3], 10, 64)
 	y, _ := strconv.ParseUint(path[4], 10, 64)
+	scale := path[5]
 
-	t.ServeTileRequest(w, r, TileCoord{x, y, z, t.TmsSchema, l})
+	if t.m == nil {
+		t.m = NewTileDb(fmt.Sprintf("%s%s.mbtiles", l, scale))
+	}
+	_, present := t.lmp.layerChans[l]
+	if !present {
+		t.lmp.AddRenderer(l, t.url)
+	}
+
+	t.ServeTileRequest(w, r, TileCoord{x, y, z, t.TmsSchema, l, scale, t.url})
 }

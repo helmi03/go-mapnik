@@ -22,8 +22,8 @@ func DefaultRenderMultiplex(defaultStylesheet string) *LayerMultiplex {
 	return l
 }
 
-func (l *LayerMultiplex) AddRenderer(name string, stylesheet string) {
-	l.layerChans[name] = NewTileRendererChan(stylesheet)
+func (l *LayerMultiplex) AddRenderer(name string, url string) {
+	l.layerChans[name] = NewTileRendererChan(url)
 }
 
 func (l *LayerMultiplex) AddSource(name string, fetchChan chan<- TileFetchRequest) {

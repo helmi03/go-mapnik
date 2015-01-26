@@ -137,6 +137,12 @@ func (m *TileDb) insert(i TileFetchResult) {
 	}
 	s := fmt.Sprintf("%x", h.Sum(nil))
 	row := m.db.QueryRow("SELECT 1 FROM tile_blobs WHERE checksum=?", s)
+	// Sets the synchronous flag to OFF for (much) faster inserts.
+	// See http://www.sqlite.org/pragma.html#pragma_synchronous
+	_, err = m.db.Exec("PRAGMA synchronous=OFF")
+	if err != nil {
+		log.Println("error during pragma", err)
+	}
 	var dummy uint64
 	err = row.Scan(&dummy)
 	switch {
@@ -155,6 +161,10 @@ func (m *TileDb) insert(i TileFetchResult) {
 	sql := "REPLACE INTO layered_tiles VALUES(?, ?, ?, ?, ?)"
 	if _, err = m.db.Exec(sql, m.layerIds[l], z, x, y, s); err != nil {
 		log.Println(err)
+	}
+	_, err = m.db.Exec("PRAGMA synchronous=NORMAL")
+	if err != nil {
+		log.Println("error during pragma", err)
 	}
 }
 

@@ -2,19 +2,18 @@ package maptiles
 
 import (
 	"fmt"
+	"io/ioutil"
 	"log"
-
-	"github.com/fawick/go-mapnik/mapnik"
+	"net/http"
+	"strings"
 )
 
 type TileCoord struct {
 	X, Y, Zoom uint64
 	Tms        bool
 	Layer      string
-}
-
-func (c TileCoord) OSMFilename() string {
-	return fmt.Sprintf("%d/%d/%d.png", c.Zoom, c.X, c.Y)
+	Scale      string
+	Url        string
 }
 
 type TileFetchResult struct {
@@ -41,13 +40,15 @@ func NewTileRendererChan(stylesheet string) chan<- TileFetchRequest {
 		var err error
 		t := NewTileRenderer(stylesheet)
 		for request := range requestChan {
-			result := TileFetchResult{request.Coord, nil}
-			result.BlobPNG, err = t.RenderTile(request.Coord)
-			if err != nil {
-				log.Println("Error while rendering", request.Coord, ":", err.Error())
-				result.BlobPNG = nil
-			}
-			request.OutChan <- result
+			go func(request TileFetchRequest, t *TileRenderer) {
+				result := TileFetchResult{request.Coord, nil}
+				result.BlobPNG, err = t.RenderTile(request.Coord)
+				if err != nil {
+					log.Println("Error while rendering", request.Coord, ":", err.Error())
+					result.BlobPNG = nil
+				}
+				request.OutChan <- result
+			}(request, t)
 		}
 	}(c)
 
@@ -56,8 +57,7 @@ func NewTileRendererChan(stylesheet string) chan<- TileFetchRequest {
 
 // Renders images as Web Mercator tiles
 type TileRenderer struct {
-	m  *mapnik.Map
-	mp mapnik.Projection
+	m string
 }
 
 func NewTileRenderer(stylesheet string) *TileRenderer {
@@ -66,16 +66,13 @@ func NewTileRenderer(stylesheet string) *TileRenderer {
 	if err != nil {
 		log.Fatal(err)
 	}
-	t.m = mapnik.NewMap(256, 256)
-	t.m.Load(stylesheet)
-	t.mp = t.m.Projection()
 
 	return t
 }
 
 func (t *TileRenderer) RenderTile(c TileCoord) ([]byte, error) {
 	c.setTMS(false)
-	return t.RenderTileZXY(c.Zoom, c.X, c.Y)
+	return t.RenderTileZXY(c.Zoom, c.X, c.Y, c.Scale, c.Layer, c.Url)
 }
 
 // Render a tile with coordinates in Google tile format.
@@ -83,24 +80,19 @@ func (t *TileRenderer) RenderTile(c TileCoord) ([]byte, error) {
 // so wrap with a mutex when accessing the same renderer by multiple
 // threads or setup multiple goroutinesand communicate with channels,
 // see NewTileRendererChan.
-func (t *TileRenderer) RenderTileZXY(zoom, x, y uint64) ([]byte, error) {
-	// Calculate pixel positions of bottom left & top right
-	p0 := [2]float64{float64(x) * 256, (float64(y) + 1) * 256}
-	p1 := [2]float64{(float64(x) + 1) * 256, float64(y) * 256}
+func (t *TileRenderer) RenderTileZXY(zoom, x, y uint64, scale, layer, url string) ([]byte, error) {
+	tile_url := strings.Replace(url, "{z}", fmt.Sprintf("%d", zoom), 1)
+	tile_url = strings.Replace(tile_url, "{x}", fmt.Sprintf("%d", x), 1)
+	tile_url = strings.Replace(tile_url, "{y}", fmt.Sprintf("%d%s", y, scale), 1)
+	tile_url = strings.Replace(tile_url, "{layer}", layer, 1)
+	// tile_url := fmt.Sprintf("http://thor.tux:13013/style/%d/%d/%d%s.png?id=tmstyle:///app/kelantan-tm2/%s.tm2", zoom, x, y, scale, layer)
+	// fmt.Printf("%s\n", url)
+	// TODO: handle 404/500 error from mapbox-studio
+	var resp, err = http.Get(tile_url)
+	if err != nil {
+		return nil, err
+	}
 
-	// Convert to LatLong(EPSG:4326)
-	l0 := fromPixelToLL(p0, zoom)
-	l1 := fromPixelToLL(p1, zoom)
-
-	// Convert to map projection (e.g. mercartor co-ords EPSG:3857)
-	c0 := t.mp.Forward(mapnik.Coord{l0[0], l0[1]})
-	c1 := t.mp.Forward(mapnik.Coord{l1[0], l1[1]})
-
-	// Bounding box for the Tile
-	t.m.Resize(256, 256)
-	t.m.ZoomToMinMax(c0.X, c0.Y, c1.X, c1.Y)
-	t.m.SetBufferSize(128)
-
-	blob, err := t.m.RenderToMemoryPng()
-	return blob, err
+	defer resp.Body.Close()
+	return ioutil.ReadAll(resp.Body)
 }

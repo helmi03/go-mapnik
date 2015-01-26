@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"regexp"
 	"strconv"
 )
@@ -13,19 +14,23 @@ import (
 // Handles HTTP requests for map tiles, caching any produced tiles
 // in an MBtiles 1.2 compatible sqlite db.
 type TileServer struct {
-	m         *TileDb
+	m         map[string]*TileDb
 	lmp       *LayerMultiplex
 	TmsSchema bool
 	// cacheFile string
-	url string
+	url     string
+	basedir string
 }
 
-func NewTileServer(url string) *TileServer {
+func NewTileServer(url, basedir string) *TileServer {
 	t := TileServer{}
 	t.lmp = NewLayerMultiplex()
 	// t.m = NewTileDb(cacheFile)
 	// t.cacheFile = cacheFile
 	t.url = url
+	t.basedir = basedir
+	os.Mkdir(t.basedir, 0755)
+	t.m = make(map[string]*TileDb)
 
 	return &t
 }
@@ -42,7 +47,7 @@ func (t *TileServer) ServeTileRequest(w http.ResponseWriter, r *http.Request, tc
 	ch := make(chan TileFetchResult)
 
 	tr := TileFetchRequest{tc, ch}
-	t.m.RequestQueue() <- tr
+	t.m[fmt.Sprintf("%s_%s", tc.Layer, tc.Scale)].RequestQueue() <- tr
 
 	result := <-ch
 	needsInsert := false
@@ -65,7 +70,7 @@ func (t *TileServer) ServeTileRequest(w http.ResponseWriter, r *http.Request, tc
 		log.Println(err)
 	}
 	if needsInsert {
-		t.m.InsertQueue() <- result // insert newly rendered tile into cache db
+		t.m[fmt.Sprintf("%s_%s", tc.Layer, tc.Scale)].InsertQueue() <- result // insert newly rendered tile into cache db
 	}
 }
 
@@ -83,8 +88,9 @@ func (t *TileServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	y, _ := strconv.ParseUint(path[4], 10, 64)
 	scale := path[5]
 
-	if t.m == nil {
-		t.m = NewTileDb(fmt.Sprintf("%s%s.mbtiles", l, scale))
+	_, p1 := t.m[fmt.Sprintf("%s_%s", l, scale)]
+	if !p1 {
+		t.m[fmt.Sprintf("%s_%s", l, scale)] = NewTileDb(fmt.Sprintf("%s/%s%s.mbtiles", t.basedir, l, scale))
 	}
 	_, present := t.lmp.layerChans[l]
 	if !present {

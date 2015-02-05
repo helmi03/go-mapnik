@@ -7,6 +7,7 @@ import (
 	"os"
 	"regexp"
 	"strconv"
+	"strings"
 )
 
 // TODO serve list of registered layers per HTTP (preferably leafletjs-compatible js-array)
@@ -41,13 +42,14 @@ func (t *TileServer) AddXYZLayer(layerName string, url string) {
 }
 */
 
-var pathRegex = regexp.MustCompile(`/([-A-Za-z0-9]+)/([0-9]+)/([0-9]+)/([0-9]+)(@[0-9]+x)?\.png`)
+var pathRegex = regexp.MustCompile(`/([-A-Za-z0-9]+)/([0-9]+)/([0-9]+)/([0-9]+)(@[0-9]+x)?\.(png[0-9]{0,3}|jpe?g1?[0-9]{0,2})`)
 
 func (t *TileServer) ServeTileRequest(w http.ResponseWriter, r *http.Request, tc TileCoord) {
 	ch := make(chan TileFetchResult)
 
 	tr := TileFetchRequest{tc, ch}
-	t.m[fmt.Sprintf("%s_%s", tc.Layer, tc.Scale)].RequestQueue() <- tr
+	k := fmt.Sprintf("%s_%s_%s", tc.Layer, tc.Scale, tc.Format)
+	t.m[k].RequestQueue() <- tr
 
 	result := <-ch
 	needsInsert := false
@@ -70,7 +72,7 @@ func (t *TileServer) ServeTileRequest(w http.ResponseWriter, r *http.Request, tc
 		log.Println(err)
 	}
 	if needsInsert {
-		t.m[fmt.Sprintf("%s_%s", tc.Layer, tc.Scale)].InsertQueue() <- result // insert newly rendered tile into cache db
+		t.m[k].InsertQueue() <- result // insert newly rendered tile into cache db
 	}
 }
 
@@ -87,15 +89,17 @@ func (t *TileServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	x, _ := strconv.ParseUint(path[3], 10, 64)
 	y, _ := strconv.ParseUint(path[4], 10, 64)
 	scale := path[5]
+	format := strings.Replace(path[6], "jpg", "jpeg", 1)
 
-	_, p1 := t.m[fmt.Sprintf("%s_%s", l, scale)]
+	k := fmt.Sprintf("%s_%s_%s", l, scale, format)
+	_, p1 := t.m[k]
 	if !p1 {
-		t.m[fmt.Sprintf("%s_%s", l, scale)] = NewTileDb(fmt.Sprintf("%s/%s%s.mbtiles", t.basedir, l, scale))
+		t.m[k] = NewTileDb(fmt.Sprintf("%s/%s_%s_%s.mbtiles", t.basedir, l, scale, format))
 	}
 	_, present := t.lmp.layerChans[l]
 	if !present {
 		t.lmp.AddRenderer(l, t.url)
 	}
 
-	t.ServeTileRequest(w, r, TileCoord{x, y, z, t.TmsSchema, l, scale, t.url})
+	t.ServeTileRequest(w, r, TileCoord{x, y, z, t.TmsSchema, l, scale, t.url, format})
 }

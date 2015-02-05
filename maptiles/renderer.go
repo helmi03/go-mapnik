@@ -14,6 +14,7 @@ type TileCoord struct {
 	Layer      string
 	Scale      string
 	Url        string
+	Format     string
 }
 
 type TileFetchResult struct {
@@ -72,7 +73,7 @@ func NewTileRenderer(stylesheet string) *TileRenderer {
 
 func (t *TileRenderer) RenderTile(c TileCoord) ([]byte, error) {
 	c.setTMS(false)
-	return t.RenderTileZXY(c.Zoom, c.X, c.Y, c.Scale, c.Layer, c.Url)
+	return t.RenderTileZXY(c.Zoom, c.X, c.Y, c.Scale, c.Layer, c.Url, c.Format)
 }
 
 // Render a tile with coordinates in Google tile format.
@@ -80,13 +81,15 @@ func (t *TileRenderer) RenderTile(c TileCoord) ([]byte, error) {
 // so wrap with a mutex when accessing the same renderer by multiple
 // threads or setup multiple goroutinesand communicate with channels,
 // see NewTileRendererChan.
-func (t *TileRenderer) RenderTileZXY(zoom, x, y uint64, scale, layer, url string) ([]byte, error) {
+func (t *TileRenderer) RenderTileZXY(zoom, x, y uint64, scale, layer, url, format string) ([]byte, error) {
 	tile_url := strings.Replace(url, "{z}", fmt.Sprintf("%d", zoom), 1)
 	tile_url = strings.Replace(tile_url, "{x}", fmt.Sprintf("%d", x), 1)
 	tile_url = strings.Replace(tile_url, "{y}", fmt.Sprintf("%d%s", y, scale), 1)
 	tile_url = strings.Replace(tile_url, "{layer}", layer, 1)
-	// tile_url := fmt.Sprintf("http://thor.tux:13013/style/%d/%d/%d%s.png?id=tmstyle:///app/kelantan-tm2/%s.tm2", zoom, x, y, scale, layer)
-	// fmt.Printf("%s\n", url)
+	if format == "jpg" {
+		format = "jpeg"
+	}
+	tile_url = strings.Replace(tile_url, "{format}", format, 1)
 	// TODO: handle 404/500 error from mapbox-studio
 	var resp, err = http.Get(tile_url)
 	if err != nil {

@@ -35,13 +35,14 @@ func NewTileDb(path string) *TileDb {
 		"CREATE TABLE IF NOT EXISTS metadata (name text PRIMARY KEY NOT NULL, value text NOT NULL)",
 		"CREATE TABLE IF NOT EXISTS layered_tiles (layer_id integer, zoom_level integer, tile_column integer, tile_row integer, checksum text, PRIMARY KEY (layer_id, zoom_level, tile_column, tile_row) FOREIGN KEY(checksum) REFERENCES tile_blobs(checksum))",
 		"CREATE TABLE IF NOT EXISTS tile_blobs (checksum text, tile_data blob)",
-		"CREATE VIEW IF NOT EXISTS tiles AS SELECT layered_tiles.zoom_level as zoom_level, layered_tiles.tile_column as tile_column, layered_tiles.tile_row as tile_row, (SELECT tile_data FROM tile_blobs WHERE checksum=layered_tiles.checksum) as tile_data FROM layered_tiles WHERE layered_tiles.layer_id = (SELECT rowid FROM layers WHERE layer_name='default')",
+		//! "CREATE VIEW IF NOT EXISTS tiles AS SELECT layered_tiles.zoom_level as zoom_level, layered_tiles.tile_column as tile_column, layered_tiles.tile_row as tile_row, (SELECT tile_data FROM tile_blobs WHERE checksum=layered_tiles.checksum) as tile_data FROM layered_tiles WHERE layered_tiles.layer_id = (SELECT rowid FROM layers WHERE layer_name='default')",
+		"CREATE VIEW IF NOT EXISTS tiles AS SELECT layered_tiles.zoom_level as zoom_level, layered_tiles.tile_column as tile_column, layered_tiles.tile_row as tile_row, (SELECT tile_data FROM tile_blobs WHERE checksum=layered_tiles.checksum) as tile_data FROM layered_tiles WHERE layered_tiles.layer_id = '0'",
 		"REPLACE INTO metadata VALUES('name', 'go-mapnik cache file')",
 		"REPLACE INTO metadata VALUES('type', 'overlay')",
-		"REPLACE INTO metadata VALUES('version', '0')",
-		"REPLACE INTO metadata VALUES('description', 'Compatible with MBTiles spec 1.2. However, this file may contain multiple overlay layers, but only the layer called default is exported as MBtiles')",
+		"REPLACE INTO metadata VALUES('version', '1')",
+		"REPLACE INTO metadata VALUES('description', 'Compatible with MBTiles spec 1.2.')",
 		"REPLACE INTO metadata VALUES('format', 'png')",
-		"REPLACE INTO metadata VALUES('bounds', '-180.0,-85,180,85')",
+		// "REPLACE INTO metadata VALUES('bounds', '-180.0,-85,180,85')",
 		"INSERT OR IGNORE INTO layers(layer_name) VALUES('default')",
 	}
 
@@ -124,13 +125,13 @@ func (m *TileDb) Run() {
 }
 
 func (m *TileDb) insert(i TileFetchResult) {
-	i.Coord.setTMS(true)
+	i.Coord.setTMS(false)
 	x, y, z, l := i.Coord.X, i.Coord.Y, i.Coord.Zoom, i.Coord.Layer
 	if l == "" {
 		l = "default"
 	}
 	h := md5.New()
-	_, err := h.Write(i.BlobPNG)
+	_, err := h.Write(i.Blob)
 	if err != nil {
 		log.Println(err)
 		return
@@ -147,7 +148,7 @@ func (m *TileDb) insert(i TileFetchResult) {
 	err = row.Scan(&dummy)
 	switch {
 	case err == sql.ErrNoRows:
-		if _, err = m.db.Exec("REPLACE INTO tile_blobs VALUES(?,?)", s, i.BlobPNG); err != nil {
+		if _, err = m.db.Exec("REPLACE INTO tile_blobs VALUES(?,?)", s, i.Blob); err != nil {
 			log.Println("error during insert", err)
 			return
 		}
@@ -157,9 +158,11 @@ func (m *TileDb) insert(i TileFetchResult) {
 	default:
 		//log.Println("Reusing blob", s)
 	}
-	m.ensureLayer(l)
+	// m.ensureLayer(l)
+	// layer_id := m.layerIds[l]
+	layer_id := "0"
 	sql := "REPLACE INTO layered_tiles VALUES(?, ?, ?, ?, ?)"
-	if _, err = m.db.Exec(sql, m.layerIds[l], z, x, y, s); err != nil {
+	if _, err = m.db.Exec(sql, layer_id, z, x, y, s); err != nil {
 		log.Println(err)
 	}
 	_, err = m.db.Exec("PRAGMA synchronous=NORMAL")
@@ -169,11 +172,12 @@ func (m *TileDb) insert(i TileFetchResult) {
 }
 
 func (m *TileDb) fetch(r TileFetchRequest) {
-	r.Coord.setTMS(true)
+	r.Coord.setTMS(false)
 	zoom, x, y, l := r.Coord.Zoom, r.Coord.X, r.Coord.Y, r.Coord.Layer
-	if l == "" {
-		l = "default"
-	}
+	l = "default"
+	// if l == "" {
+	// 	l = "default"
+	// }
 	result := TileFetchResult{r.Coord, nil}
 	queryString := `
 		SELECT tile_data 
@@ -184,18 +188,18 @@ func (m *TileDb) fetch(r TileFetchRequest) {
 			WHERE zoom_level=? 
 				AND tile_column=? 
 				AND tile_row=?
-				AND layer_id=(SELECT rowid FROM layers WHERE layer_name=?)
+				AND layer_id='0'
 		)`
 	var blob []byte
 	row := m.db.QueryRow(queryString, zoom, x, y, l)
 	err := row.Scan(&blob)
 	switch {
 	case err == sql.ErrNoRows:
-		result.BlobPNG = nil
+		result.Blob = nil
 	case err != nil:
 		log.Println(err)
 	default:
-		result.BlobPNG = blob
+		result.Blob = blob
 	}
 	r.OutChan <- result
 }

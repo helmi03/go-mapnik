@@ -1,8 +1,6 @@
 package maptiles
 
-import (
-	"log"
-)
+import "log"
 
 type LayerMultiplex struct {
 	layerChans map[string]chan<- TileFetchRequest
@@ -23,15 +21,19 @@ func DefaultRenderMultiplex(defaultStylesheet string) *LayerMultiplex {
 }
 
 func (l *LayerMultiplex) AddRenderer(name string, url string) {
+	name = "default"
 	l.layerChans[name] = NewTileRendererChan(url)
 }
 
 func (l *LayerMultiplex) AddSource(name string, fetchChan chan<- TileFetchRequest) {
+	name = "default"
 	l.layerChans[name] = fetchChan
 }
 
 func (l LayerMultiplex) SubmitRequest(r TileFetchRequest) bool {
-	c, ok := l.layerChans[r.Coord.Layer]
+	// name = r.Coord.Layer
+	name := "default"
+	c, ok := l.layerChans[name]
 	if ok {
 		c <- r
 	} else {

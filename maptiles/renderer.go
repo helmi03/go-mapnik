@@ -18,8 +18,8 @@ type TileCoord struct {
 }
 
 type TileFetchResult struct {
-	Coord   TileCoord
-	BlobPNG []byte
+	Coord TileCoord
+	Blob  []byte
 }
 
 type TileFetchRequest struct {
@@ -43,10 +43,10 @@ func NewTileRendererChan(stylesheet string) chan<- TileFetchRequest {
 		for request := range requestChan {
 			go func(request TileFetchRequest, t *TileRenderer) {
 				result := TileFetchResult{request.Coord, nil}
-				result.BlobPNG, err = t.RenderTile(request.Coord)
+				result.Blob, err = t.RenderTile(request.Coord)
 				if err != nil {
 					log.Println("Error while rendering", request.Coord, ":", err.Error())
-					result.BlobPNG = nil
+					result.Blob = nil
 				}
 				request.OutChan <- result
 			}(request, t)

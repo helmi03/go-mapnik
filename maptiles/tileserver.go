@@ -1,6 +1,8 @@
 package maptiles
 
 import (
+	"crypto/md5"
+	"database/sql"
 	"fmt"
 	"log"
 	"net/http"
@@ -8,6 +10,13 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+
+	"github.com/golang/groupcache"
+)
+
+var (
+	pool  *groupcache.HTTPPool
+	cache *groupcache.Group
 )
 
 // TODO serve list of registered layers per HTTP (preferably leafletjs-compatible js-array)
@@ -19,8 +28,10 @@ type TileServer struct {
 	lmp       *LayerMultiplex
 	TmsSchema bool
 	// cacheFile string
-	url     string
-	basedir string
+	url       string
+	basedir   string
+	cache     *groupcache.Group
+	PathComps map[string]string
 }
 
 func NewTileServer(url, basedir string) *TileServer {
@@ -30,19 +41,46 @@ func NewTileServer(url, basedir string) *TileServer {
 	t.basedir = basedir
 	os.Mkdir(t.basedir, 0755)
 	t.m = make(map[string]*TileDb)
+	pool = groupcache.NewHTTPPool(fmt.Sprintf("http://127.0.0.1:%v", 9999))
+	t.cache = groupcache.NewGroup("TileCache", 100*1048576, groupcache.GetterFunc(
+		func(ctx groupcache.Context, key string, dest groupcache.Sink) error {
+			fnParams := strings.Split(key, ":")
+			pathParams := strings.Split(fnParams[0], "/")
+			z, _ := strconv.ParseUint(pathParams[0], 0, 64)
+			x, _ := strconv.ParseUint(pathParams[1], 0, 64)
+			y, _ := strconv.ParseUint(pathParams[2], 0, 64)
+			fn := fnParams[1]
+			//flip y to match TMS spec
+			y = (1 << z) - 1 - y
+
+			var tileData []byte
+
+			db, err := sql.Open("sqlite3", fn)
+			if err != nil {
+				fmt.Printf("Error database. %s\n", err.Error())
+			}
+			defer db.Close()
+			queryString := `
+			SELECT tile_data
+			FROM tile_blobs
+			WHERE checksum=(
+				SELECT checksum
+				FROM layered_tiles
+				WHERE zoom_level=?
+				AND tile_column=?
+				AND tile_row=?
+				AND layer_id='0')`
+			row := db.QueryRow(queryString, z, x, y)
+			row.Scan(&tileData)
+			dest.SetBytes(tileData)
+			return nil
+		}))
 
 	return &t
 }
 
-/*
-func (t *TileServer) AddXYZLayer(layerName string, url string) {
-	t.lmp.AddRenderer(layerName, url)
-}
-*/
-
-var pathRegex = regexp.MustCompile(`/([-A-Za-z0-9]+)/([0-9]+)/([0-9]+)/([0-9]+)(@[0-9]+x)?\.(png[0-9]{0,3}|jpe?g1?[0-9]{0,2}|(vector\.)?pbf)`)
-
 func (t *TileServer) ServeTileRequest(w http.ResponseWriter, r *http.Request, tc TileCoord) {
+
 	ch := make(chan TileFetchResult)
 
 	tr := TileFetchRequest{tc, ch}
@@ -80,6 +118,12 @@ func (t *TileServer) ServeTileRequest(w http.ResponseWriter, r *http.Request, tc
 	} else {
 		w.Header().Set("Content-Type", "image/png")
 	}
+	etag := fmt.Sprintf("%x", md5.Sum(result.Blob))
+	if r.Header.Get("If-None-Match") == etag {
+		w.WriteHeader(http.StatusNotModified)
+		return
+	}
+	w.Header().Add("ETag", etag)
 	_, err := w.Write(result.Blob)
 	if err != nil {
 		log.Println(err)
@@ -90,31 +134,46 @@ func (t *TileServer) ServeTileRequest(w http.ResponseWriter, r *http.Request, tc
 }
 
 func (t *TileServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	path := pathRegex.FindStringSubmatch(r.URL.Path)
+	var z, x, y uint64
+	var l, format, scale string
+	if len(t.PathComps) > 0 {
+		z, _ = strconv.ParseUint(t.PathComps["z"], 10, 64)
+		x, _ = strconv.ParseUint(t.PathComps["x"], 10, 64)
+		y, _ = strconv.ParseUint(t.PathComps["y"], 10, 64)
+		l = t.PathComps["layername"]
+		format = t.PathComps["format"]
+		scale = t.PathComps["scale"]
+	} else {
+		pathRegex := regexp.MustCompile(`/([-A-Za-z0-9]+)/([0-9]+)/([0-9]+)/([0-9]+)(@[0-9]+x)?\.(png[0-9]{0,3}|jpe?g1?[0-9]{0,2}|(vector\.)?pbf)`)
+		path := pathRegex.FindStringSubmatch(r.URL.Path)
 
-	if path == nil {
-		http.NotFound(w, r)
-		return
+		if path == nil {
+			http.NotFound(w, r)
+			return
+		}
+
+		l = path[1]
+		z, _ = strconv.ParseUint(path[2], 10, 64)
+		x, _ = strconv.ParseUint(path[3], 10, 64)
+		y, _ = strconv.ParseUint(path[4], 10, 64)
+		scale = path[5]
+		format = path[6]
 	}
-
-	l := path[1]
-	z, _ := strconv.ParseUint(path[2], 10, 64)
-	x, _ := strconv.ParseUint(path[3], 10, 64)
-	y, _ := strconv.ParseUint(path[4], 10, 64)
-	scale := path[5]
-	format := strings.Replace(path[6], "jpg", "jpeg", 1)
+	format = strings.Replace(format, "jpg", "jpeg", 1)
 	if format == "pbf" {
 		format = "vector.pbf"
 	}
 
 	k := fmt.Sprintf("%s_%s_%s", l, scale, format)
 	_, p1 := t.m[k]
+	var fn string
 	if !p1 {
-		fn := fmt.Sprintf("%s/%s_%s.mbtiles", t.basedir, l, format)
+		fn = fmt.Sprintf("%s/%s_%s.mbtiles", t.basedir, l, format)
 		if scale != "" {
 			fn = fmt.Sprintf("%s/%s_%s_%s.mbtiles", t.basedir, l, scale, format)
 		}
 		t.m[k] = NewTileDb(fn)
+		t.m[k].path = fn
 	}
 	_, present := t.lmp.layerChans[l]
 	if !present {
@@ -125,6 +184,26 @@ func (t *TileServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		url = strings.Replace(url, "tmstyle", "tmsource", 1)
 		url = strings.Replace(url, ".tm2", ".tm2source", 1)
 		url = strings.Replace(url, "/style", "/source", 1)
+	}
+
+	var data []byte
+	key := fmt.Sprintf("%d/%d/%d:%s", z, x, y, t.m[k].path)
+	err := t.cache.Get(nil, key, groupcache.AllocatingByteSliceSink(&data))
+	if err != nil {
+		log.Printf("Error groupcache. %s\n", err.Error())
+	}
+	if len(data) > 1 {
+		etag := fmt.Sprintf("%x", md5.Sum(data))
+		if r.Header.Get("If-None-Match") == etag {
+			w.WriteHeader(http.StatusNotModified)
+			return
+		}
+		w.Header().Add("ETag", etag)
+		_, err := w.Write(data)
+		if err != nil {
+			log.Printf("Error write to response, %s", err.Error())
+		}
+		return
 	}
 
 	t.ServeTileRequest(w, r, TileCoord{x, y, z, t.TmsSchema, l, scale, url, format})

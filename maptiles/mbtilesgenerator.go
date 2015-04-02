@@ -19,10 +19,12 @@ type TileDb struct {
 	insertChan  chan TileFetchResult
 	layerIds    map[string]int
 	qc          chan bool
+	path        string
 }
 
 func NewTileDb(path string) *TileDb {
 	m := TileDb{}
+	m.path = path
 	var err error
 	m.db, err = sql.Open("sqlite3", path)
 	if err != nil {
@@ -125,7 +127,7 @@ func (m *TileDb) Run() {
 }
 
 func (m *TileDb) insert(i TileFetchResult) {
-	i.Coord.setTMS(false)
+	i.Coord.setTMS(true)
 	x, y, z, l := i.Coord.X, i.Coord.Y, i.Coord.Zoom, i.Coord.Layer
 	if l == "" {
 		l = "default"
@@ -172,26 +174,22 @@ func (m *TileDb) insert(i TileFetchResult) {
 }
 
 func (m *TileDb) fetch(r TileFetchRequest) {
-	r.Coord.setTMS(false)
-	zoom, x, y, l := r.Coord.Zoom, r.Coord.X, r.Coord.Y, r.Coord.Layer
-	l = "default"
-	// if l == "" {
-	// 	l = "default"
-	// }
+	r.Coord.setTMS(true)
+	zoom, x, y := r.Coord.Zoom, r.Coord.X, r.Coord.Y
 	result := TileFetchResult{r.Coord, nil}
 	queryString := `
-		SELECT tile_data 
-		FROM tile_blobs 
+		SELECT tile_data
+		FROM tile_blobs
 		WHERE checksum=(
-			SELECT checksum 
-			FROM layered_tiles 
-			WHERE zoom_level=? 
-				AND tile_column=? 
+			SELECT checksum
+			FROM layered_tiles
+			WHERE zoom_level=?
+				AND tile_column=?
 				AND tile_row=?
 				AND layer_id='0'
 		)`
 	var blob []byte
-	row := m.db.QueryRow(queryString, zoom, x, y, l)
+	row := m.db.QueryRow(queryString, zoom, x, y)
 	err := row.Scan(&blob)
 	switch {
 	case err == sql.ErrNoRows:

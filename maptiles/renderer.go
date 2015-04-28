@@ -79,7 +79,7 @@ func (t *TileRenderer) RenderTile(c TileCoord) ([]byte, error) {
 // Render a tile with coordinates in Google tile format.
 // Most upper left tile is always 0,0. Method is not thread-safe,
 // so wrap with a mutex when accessing the same renderer by multiple
-// threads or setup multiple goroutinesand communicate with channels,
+// threads or setup multiple goroutines and communicate with channels,
 // see NewTileRendererChan.
 func (t *TileRenderer) RenderTileZXY(zoom, x, y uint64, scale, layer, url, format string) ([]byte, error) {
 	tile_url := strings.Replace(url, "{z}", fmt.Sprintf("%d", zoom), 1)
@@ -93,6 +93,14 @@ func (t *TileRenderer) RenderTileZXY(zoom, x, y uint64, scale, layer, url, forma
 	// TODO: handle 404/500 error from mapbox-studio
 	var resp, err = http.Get(tile_url)
 	if err != nil {
+		return nil, err
+	}
+	no_retry := 3
+	if no_retry >= 0 && resp.StatusCode != 200 {
+		no_retry = no_retry - 1
+		return t.RenderTileZXY(zoom, x, y, scale, layer, url, format)
+	}
+	if resp.StatusCode >= 500 && resp.StatusCode <= 599 {
 		return nil, err
 	}
 

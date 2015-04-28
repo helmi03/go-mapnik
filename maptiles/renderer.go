@@ -58,7 +58,8 @@ func NewTileRendererChan(stylesheet string) chan<- TileFetchRequest {
 
 // Renders images as Web Mercator tiles
 type TileRenderer struct {
-	m string
+	m        string
+	no_retry int
 }
 
 func NewTileRenderer(stylesheet string) *TileRenderer {
@@ -67,6 +68,7 @@ func NewTileRenderer(stylesheet string) *TileRenderer {
 	if err != nil {
 		log.Fatal(err)
 	}
+	t.no_retry = 3
 
 	return t
 }
@@ -95,9 +97,8 @@ func (t *TileRenderer) RenderTileZXY(zoom, x, y uint64, scale, layer, url, forma
 	if err != nil {
 		return nil, err
 	}
-	no_retry := 3
-	if no_retry >= 0 && resp.StatusCode != 200 {
-		no_retry = no_retry - 1
+	if t.no_retry >= 0 && resp.StatusCode != 200 {
+		t.no_retry = t.no_retry - 1
 		return t.RenderTileZXY(zoom, x, y, scale, layer, url, format)
 	}
 	if resp.StatusCode >= 500 && resp.StatusCode <= 599 {

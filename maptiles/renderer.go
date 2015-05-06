@@ -101,7 +101,7 @@ func (t *TileRenderer) RenderTileZXY(zoom, x, y uint64, scale, layer, url, forma
 		t.no_retry = t.no_retry - 1
 		return t.RenderTileZXY(zoom, x, y, scale, layer, url, format)
 	}
-	if resp.StatusCode >= 500 && resp.StatusCode <= 599 {
+	if resp.StatusCode >= 400 && resp.StatusCode <= 599 {
 		return nil, err
 	}
 

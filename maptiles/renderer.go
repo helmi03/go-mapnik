@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 	"strings"
+	"time"
 )
 
 type TileCoord struct {
@@ -45,7 +46,7 @@ func NewTileRendererChan(stylesheet string) chan<- TileFetchRequest {
 				result := TileFetchResult{request.Coord, nil}
 				result.Blob, err = t.RenderTile(request.Coord)
 				if err != nil {
-					log.Println("Error while rendering", request.Coord, ":", err.Error())
+					// log.Println("Error while rendering", request.Coord, ":", err.Error())
 					result.Blob = nil
 				}
 				request.OutChan <- result
@@ -92,17 +93,27 @@ func (t *TileRenderer) RenderTileZXY(zoom, x, y uint64, scale, layer, url, forma
 		format = "jpeg"
 	}
 	tile_url = strings.Replace(tile_url, "{format}", format, 1)
-	// TODO: handle 404/500 error from mapbox-studio
+	// If sql error in datasource, Mapbox Studio resp.StatusCode=404
 	var resp, err = http.Get(tile_url)
 	if err != nil {
 		return nil, err
 	}
-	if t.no_retry >= 0 && resp.StatusCode != 200 {
+	if resp.StatusCode >= 400 && resp.StatusCode <= 499 {
+		return nil, fmt.Errorf("%d", http.StatusNotFound)
+	}
+	// Only retry when "Error: Timed out after 5000ms" -- Assume Mapbox Studio
+	// processing tile in background and we can retry request later
+	// If reach this 5000ms error = candidate to refactor datasource
+	if t.no_retry > 0 && resp.StatusCode >= 500 && resp.StatusCode <= 599 {
+		ms := 500 * time.Millisecond
+		// log.Printf("Retry #%d, wait %d ms", t.no_retry, ms/time.Millisecond)
+		time.Sleep(ms)
 		t.no_retry = t.no_retry - 1
 		return t.RenderTileZXY(zoom, x, y, scale, layer, url, format)
 	}
-	if resp.StatusCode >= 400 && resp.StatusCode <= 599 {
-		return nil, err
+	if t.no_retry < 1 {
+		// log.Println("Giveup")
+		return nil, fmt.Errorf("Timeout from tile server")
 	}
 
 	defer resp.Body.Close()

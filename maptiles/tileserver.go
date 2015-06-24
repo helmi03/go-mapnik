@@ -114,7 +114,6 @@ func (t *TileServer) ServeTileRequest(w http.ResponseWriter, r *http.Request, tc
 			}
 			w.Header().Set("Content-Encoding", "gzip")
 		}
-		w.Header().Set("Content-Length", fmt.Sprintf("%d", int64(len(result.Blob))))
 	} else {
 		w.Header().Set("Content-Type", "image/png")
 	}
@@ -123,6 +122,10 @@ func (t *TileServer) ServeTileRequest(w http.ResponseWriter, r *http.Request, tc
 		w.WriteHeader(http.StatusNotModified)
 		return
 	}
+	if len(result.Blob) > 0 {
+		w.Header().Set("Content-Length", fmt.Sprintf("%d", int64(len(result.Blob))))
+	}
+	w.Header().Del("Vary")
 	w.Header().Add("ETag", etag)
 	_, err := w.Write(result.Blob)
 	if err != nil {
@@ -199,6 +202,8 @@ func (t *TileServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		w.Header().Add("ETag", etag)
+		w.Header().Set("Content-Length", fmt.Sprintf("%d", int64(len(data))))
+		w.Header().Del("Vary")
 		_, err := w.Write(data)
 		if err != nil {
 			log.Printf("Error write to response, %s", err.Error())

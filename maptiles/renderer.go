@@ -94,10 +94,15 @@ func (t *TileRenderer) RenderTileZXY(zoom, x, y uint64, scale, layer, url, forma
 	}
 	tile_url = strings.Replace(tile_url, "{format}", format, 1)
 	// If sql error in datasource, Mapbox Studio resp.StatusCode=404
-	var resp, err = http.Get(tile_url)
+	timeout := time.Duration(30 * time.Second)
+	client := http.Client{
+		Timeout: timeout,
+	}
+	var resp, err = client.Get(tile_url)
 	if err != nil {
 		return nil, err
 	}
+	defer resp.Body.Close()
 	if resp.StatusCode >= 400 && resp.StatusCode <= 499 {
 		return nil, fmt.Errorf("%d", http.StatusNotFound)
 	}
@@ -116,6 +121,5 @@ func (t *TileRenderer) RenderTileZXY(zoom, x, y uint64, scale, layer, url, forma
 		return nil, fmt.Errorf("Timeout from tile server")
 	}
 
-	defer resp.Body.Close()
 	return ioutil.ReadAll(resp.Body)
 }
